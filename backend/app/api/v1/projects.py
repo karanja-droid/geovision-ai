@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+fro m sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -7,6 +7,15 @@ from backend.app.core.security import get_current_user
 from backend.app.database import get_session
 from backend.app.models.core import Project as DBProject
 from backend.app.data.seed.copperbelt_deposits import COPPERBELT_DEPOSITS
+
+import geopandas as gpd
+from io import BytesIO
+import tempfile
+import os
+from geoalchemy2.shape import from_shape
+from shapely import wkt as shapely_wkt
+from shapely.geometry import shape as shapely_shape
+import json
 
 router = APIRouter()
 
@@ -119,3 +128,99 @@ async def set_aoi(
         id=p.id, name=p.name, country=p.country, commodity=p.commodity,
         description=p.description, aoi_wkt=p.aoi_wkt, analyses_count=p.analyses_count or 0
     )
+
+
+@router.post("/{project_id}/aoi/upload", response_model=ProjectOut)
+async def upload_aoi_file(
+    project_id: int,
+    file: UploadFile = File(...),
+    user: str = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Full AOI upload + Shapefile support.
+
+    Accepts:
+    - .geojson or .json (GeoJSON FeatureCollection or Feature)
+    - .zip containing a Shapefile (.shp + companions)
+
+    Parses with geopandas, normalizes to EPSG:4326 Polygon/MultiPolygon,
+    stores WKT in aoi_wkt and proper PostGIS geometry in aoi_geom.
+    """
+    contents = await file.read()
+    fname = (file.filename or "").lower()
+
+    try:
+        if fname.endswith((".geojson", ".json")):
+            gdf = gpd.read_file(BytesIO(contents))
+        elif fname.endswith(".zip"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+            try:
+                gdf = gpd.read_file(f"zip://{tmp_path}")
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file. Upload .geojson, .json or a .zip with Shapefile contents."
+            )
+
+        if gdf is None or gdf.empty or gdf.geometry is None:
+            raise HTTPException(400, "No valid geometries found in file.")
+
+        # Use unary_union or first valid polygon
+        geom = gdf.geometry.unary_union if len(gdf) > 1 else gdf.geometry.iloc[0]
+
+        # Reproject if needed
+        if gdf.crs is not None:
+            try:
+                epsg = gdf.crs.to_epsg()
+            except:
+                epsg = None
+            if epsg != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+                geom = gdf.geometry.unary_union if len(gdf) > 1 else gdf.geometry.iloc[0]
+
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+
+        # Prefer single Polygon or MultiPolygon
+        if geom.geom_type not in ("Polygon", "MultiPolygon"):
+            # Extract polygons if possible (e.g. from GeometryCollection)
+            if hasattr(geom, "geoms"):
+                polys = [g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                if polys:
+                    from shapely.geometry import MultiPolygon
+                    geom = MultiPolygon(polys) if len(polys) > 1 else polys[0]
+
+        wkt_str = geom.wkt
+
+        proj = session.get(DBProject, project_id)
+        if not proj:
+            raise HTTPException(404, detail="Project not found")
+
+        proj.aoi_wkt = wkt_str
+        proj.aoi_geom = from_shape(geom, srid=4326)
+
+        session.add(proj)
+        session.commit()
+        session.refresh(proj)
+
+        return ProjectOut(
+            id=proj.id,
+            name=proj.name,
+            country=proj.country,
+            commodity=proj.commodity,
+            description=proj.description,
+            aoi_wkt=proj.aoi_wkt,
+            analyses_count=proj.analyses_count or 0,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse AOI file: {str(e)}")

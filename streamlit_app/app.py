@@ -1,7 +1,7 @@
 """
 GeoVision AI — Streamlit MVP (Phase 0 + early Phase 3 per DEVELOPMENT_LOOP.md)
 
-Full user flow implemented for demo. Phase 1 data tools added.
+Full user flow implemented for demo. Phase 1 data tools added. Full AOI file upload + shapefile support.
 """
 
 import streamlit as st
@@ -30,12 +30,16 @@ def fetch_projects():
 def get_demo_aoi():
     return {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[27.6, -12.3], [28.1, -12.3], [28.1, -12.7], [27.6, -12.7], [27.6, -12.3]]]}}]}
 
-def call_predict(aoi_geojson, commodity="Cu"):
+def call_predict(aoi_geojson, commodity="Cu", project_id=None):
     try:
-        r = requests.post(f"{BACKEND}/api/v1/predict", json={"aoi_geojson": aoi_geojson, "commodity": commodity}, timeout=15)
+        payload = {"aoi_geojson": aoi_geojson, "commodity": commodity}
+        if project_id is not None:
+            payload["project_id"] = project_id
+        r = requests.post(f"{BACKEND}/api/v1/predict", json=payload, timeout=15)
         r.raise_for_status()
         return r.json()
     except Exception as e:
+        # Offline demo fallback (very plausible Copperbelt results)
         st.warning("Backend not reachable — using offline demo results (still geologically calibrated).")
         return {
             "run_id": 424242,
@@ -103,8 +107,16 @@ st.caption("Phase 0 MVP + Phase 1 data layer • Following DEVELOPMENT_LOOP.md �
 with st.sidebar:
     st.header("Project & AOI")
     projects = fetch_projects()
-    proj_names = [p["name"] for p in projects]
-    selected = st.selectbox("Project", proj_names, index=0)
+    if not projects:
+        projects = [{"id": 0, "name": "Copperbelt Demo Project"}]
+    proj_map = {}
+    for p in projects:
+        label = f"{p.get('name', 'Unnamed')} (#{p.get('id', '?')})"
+        proj_map[label] = p
+    selected_label = st.selectbox("Project", list(proj_map.keys()), index=0)
+    current_proj = proj_map[selected_label]
+    pid = current_proj.get("id", 0)
+    selected = current_proj.get("name", "Demo")
 
     st.markdown("**AOI (demo or paste)**")
     use_demo = st.checkbox("Use Copperbelt Demo AOI", value=True)
@@ -115,6 +127,26 @@ with st.sidebar:
         height=80,
         disabled=use_demo
     )
+
+    st.markdown("**Or upload AOI file (full support)**")
+    uploaded_aoi = st.file_uploader(
+        "GeoJSON (.geojson/.json) or Shapefile as .zip",
+        type=["geojson", "json", "zip"],
+        key=f"aoi_upload_{selected}"
+    )
+    if uploaded_aoi:
+        if st.button("📤 Upload & Set as AOI", key=f"upload_btn_{selected}"):
+            try:
+                files = {"file": (uploaded_aoi.name, uploaded_aoi.getvalue())}
+                r = requests.post(f"{BACKEND}/api/v1/projects/{pid}/aoi/upload", files=files, timeout=30)
+                if r.ok:
+                    st.success(f"AOI uploaded for project {pid}!")
+                    st.json(r.json())
+                    st.rerun()
+                else:
+                    st.error(r.text)
+            except Exception as e:
+                st.error(f"Upload failed: {e}")
 
     commodity = st.selectbox("Primary Commodity", ["Cu", "Co", "Li", "multi"], index=0)
 
@@ -134,8 +166,6 @@ with st.sidebar:
 
     if st.button("📍 Show Deposits Inside Current AOI"):
         try:
-            # Use first project id or assume the demo one
-            pid = 0
             r = requests.get(f"{BACKEND}/api/v1/deposits-in-aoi/{pid}", timeout=10)
             data = r.json()
             st.write(f"Found {data.get('count',0)} deposits inside AOI for project {pid}")
@@ -204,7 +234,7 @@ with col2:
                     [float(x.strip().split()[0]), float(x.strip().split()[1])] for x in aoi_text.replace("POLYGON(( ", "").replace("))", "").split(",")
                 ]]}}]}
             with st.spinner("Running prospectivity..."):
-                result = call_predict(aoi, commodity)
+                result = call_predict(aoi, commodity, project_id=pid)
                 st.session_state["last_result"] = result
                 st.session_state["last_project"] = selected
         else:
@@ -243,5 +273,5 @@ with col2:
         st.info("Run an analysis from the sidebar to populate targets and map layers.")
 
 st.divider()
-st.caption("Implements DEVELOPMENT_LOOP.md Phase 0 + Phase 1 data enhancements (DB projects, AOI set, seed, deposits-in-aoi query). Backend + AI + data first, then UX.")
-st.caption("Next: Phase 2 AI engine improvements, full migrations, better auth.")
+st.caption("Implements DEVELOPMENT_LOOP.md Phase 0 + Phase 1 data enhancements (DB projects, AOI set/upload, seed, deposits-in-aoi query, full file upload + shapefile).")
+st.caption("Next: Phase 2 AI engine improvements, better drawing UI, production auth.")
