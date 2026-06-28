@@ -1,1 +1,1 @@
-[updated with deployment section]
+[The full README with the new deployment section at the end]
