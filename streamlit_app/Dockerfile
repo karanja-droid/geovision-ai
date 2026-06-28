@@ -12,13 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgdal-dev \
     proj-bin \
+    libgeos-dev \
+    libspatialindex-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml ./
-RUN uv pip install --system -e ".[dev]" --no-cache || \
-    pip install --no-cache-dir -e ".[dev]"
+RUN uv pip install --system -e "[dev]" --no-cache || \
+    pip install --no-cache-dir -e "[dev]"
 
 COPY . .
 
