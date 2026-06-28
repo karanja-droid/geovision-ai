@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from backend.app.core.config import settings
-from backend.app.core.security import get_current_user
+from backend.app.core.security import get_current_user  # used in routers
 
 # Routers
 from backend.app.api.v1.projects import router as projects_router
@@ -19,9 +19,17 @@ logger = logging.getLogger("geovision")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting GeoVision AI backend (Phase 0)")
+    logger.info("🚀 Starting GeoVision AI backend (Phase 0 + Phase 1 data layer enhancements)")
+    # For demo/Phase 1: create tables if not using full migrations yet.
+    # In production use Alembic. PostGIS extension should be enabled in the DB (docker compose does it).
+    from backend.app.database import engine
+    from backend.app.models.core import SQLModel
+    # Import all models so metadata is populated for create_all
+    from backend.app.models import core, prospectivity  # noqa: F401
+    SQLModel.metadata.create_all(bind=engine)
+    logger.info("✅ DB tables ensured")
     yield
-    logger.info("🚫 Shutting down GeoVision AI backend")
+    logger.info("🛑 Shutting down GeoVision AI backend")
 
 app = FastAPI(
     title=settings.app_name,
@@ -30,9 +38,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS (permissive for MVP demo)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.backend_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,12 +49,22 @@ app.add_middleware(
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "healthy", "app": settings.app_name, "phase": "0-foundation"}
+    """Liveness / readiness probe."""
+    return {
+        "status": "healthy",
+        "app": settings.app_name,
+        "phase": "0-foundation + phase1-data"
+    }
 
 @app.get("/", tags=["system"])
 async def root():
-    return {"message": "Welcome to GeoVision AI (Phase 0). See /docs and docs/DEVELOPMENT_LOOP.md"}
+    return {
+        "message": "Welcome to GeoVision AI (Phase 0+1). See /docs and docs/DEVELOPMENT_LOOP.md",
+        "docs": "/docs",
+        "health": "/health"
+    }
 
+# Include routers
 app.include_router(projects_router, prefix="/api/v1/projects", tags=["projects"])
 app.include_router(predict_router, prefix="/api/v1", tags=["predict"])
 
