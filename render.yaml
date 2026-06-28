@@ -12,7 +12,12 @@
 #    Follow Render instructions: Add CNAME record in your DNS (for geo-miner.com domain):
 #    beta.geo-miner.com  CNAME  <geovision-streamlit-beta>.onrender.com
 #    (Render will provision SSL.)
-# 5. Set any additional env (e.g. SECRET_KEY if not generated).
+# 5. Optionally add api.beta.geo-miner.com for backend if exposing publicly.
+# 6. Set any additional env (e.g. SECRET_KEY if not generated).
+#
+# Troubleshooting note: If you see "ModuleNotFoundError: No module named 'backend'" on the backend service,
+# it is fixed by the PYTHONPATH=. prefix in the startCommand below (ensures the repo root is on the import path
+# for the 'backend/' package layout when using uvicorn directly on Render's python build).
 #
 # Notes:
 # - Free tier services sleep after 15min inactivity. Use paid for always-on beta.
@@ -31,8 +36,8 @@ services:
     plan: free
     region: oregon
     rootDir: .
-    buildCommand: pip install -e "[dev]" || pip install httpx fastapi uvicorn sqlmodel alembic psycopg2-binary geoalchemy2 pydantic-settings geopandas shapely
-    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -e .
+    startCommand: PYTHONPATH=. uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: ENVIRONMENT
@@ -55,8 +60,8 @@ services:
     plan: free
     region: oregon
     rootDir: .
-    buildCommand: pip install -e "[dev]" || pip install httpx streamlit folium streamlit-folium pydeck reportlab geopandas shapely
-    startCommand: streamlit run streamlit_app/app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+    buildCommand: pip install -e .
+    startCommand: PYTHONPATH=. streamlit run streamlit_app/app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
     envVars:
       - key: ENVIRONMENT
         value: production
