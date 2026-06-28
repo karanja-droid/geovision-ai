@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-fro m sqlmodel import Session, select
+from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -111,12 +111,13 @@ async def set_aoi(
     """Phase 1 ingestion: set AOI via WKT or GeoJSON for a project."""
     p = session.get(DBProject, project_id)
     if not p:
-        raise HTTPException(status_code=404, detail="Project or AOI not found")
+        raise HTTPException(status_code=404, detail="Project not found")
     
     if "wkt" in aoi:
         p.aoi_wkt = aoi["wkt"]
     elif "geojson" in aoi:
-        # For simplicity, store as text (full geom parsing in later)
+        # For simplicity, store WKT equivalent or the geojson as text in wkt field for now
+        # In full impl, parse with shapely and set aoi_geom
         p.aoi_wkt = str(aoi["geojson"])
     else:
         raise HTTPException(status_code=400, detail="Provide 'wkt' or 'geojson'")
