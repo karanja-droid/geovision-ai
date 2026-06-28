@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geovision-db
+    environment:
+      POSTGRES_USER: geovision
+      POSTGRES_PASSWORD: geovision123
+      POSTGRES_DB: geovision_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geovision"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: geovision-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://geovision:geovision123@postgres:5432/geovision_db
+      SECRET_KEY: dev-secret-key-change-in-prod
+      ENVIRONMENT: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: streamlit_app/Dockerfile
+    container_name: geovision-streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - .:/app
+    command: streamlit run streamlit_app/app.py --server.address 0.0.0.0 --server.port 8501
+
+volumes:
+  postgres_data:
