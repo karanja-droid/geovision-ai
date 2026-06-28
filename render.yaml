@@ -1,0 +1,76 @@
+# Render deployment for beta.geo-miner.com
+# See DEVELOPMENT_LOOP.md for context.
+# This deploys the current clean implementation (FastAPI backend + Streamlit UI + PostGIS).
+#
+# Quick deploy:
+# 1. Push to GitHub.
+# 2. In Render.com: New > Blueprint > Connect repo > select this repo. It will use this render.yaml.
+# 3. After DB provisioned, use Render Shell for the DB or connect:
+#    psql $DATABASE_URL -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+#    Then for backend service shell or one-time: cd /app ; alembic upgrade head
+# 4. In Streamlit service Settings > Custom Domains: Add beta.geo-miner.com
+#    Follow Render instructions: Add CNAME record in your DNS (for geo-miner.com domain):
+#    beta.geo-miner.com  CNAME  <geovision-streamlit-beta>.onrender.com
+#    (Render will provision SSL.)
+# 5. Set any additional env (e.g. SECRET_KEY if not generated).
+#
+# Notes:
+# - Free tier services sleep after 15min inactivity. Use paid for always-on beta.
+# - PostGIS: Free DB may have limitations; upgrade plan if extension fails.
+# - BACKEND_URL set to the backend's onrender URL (Render handles internal resolution in some cases; verify).
+# - CORS open for beta + onrender for now.
+# - After deploy, test health, run a prediction with AOI, check weather widget.
+#
+# For production later: add workers, better DB plan, custom domains for api, monitoring.
+
+services:
+  # Backend FastAPI
+  - type: web
+    name: geovision-backend-beta
+    env: python
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: pip install -e "[dev]" || pip install httpx fastapi uvicorn sqlmodel alembic psycopg2-binary geoalchemy2 pydantic-settings geopandas shapely
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: geovision-db-beta
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: BACKEND_CORS_ORIGINS
+        value: https://beta.geo-miner.com,https://*.onrender.com,https://geovision-streamlit-beta.onrender.com
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # Streamlit UI - served at beta.geo-miner.com
+  - type: web
+    name: geovision-streamlit-beta
+    env: python
+    plan: free
+    region: oregon
+    rootDir: .
+    buildCommand: pip install -e "[dev]" || pip install httpx streamlit folium streamlit-folium pydeck reportlab geopandas shapely
+    startCommand: streamlit run streamlit_app/app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: BACKEND_URL
+        value: https://geovision-backend-beta.onrender.com  # Update if service name changes; for internal use Render's private links if available in paid plans.
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+databases:
+  - name: geovision-db-beta
+    databaseName: geovision_beta
+    user: geovision
+    plan: free
+    region: oregon
+    postgresMajorVersion: "16"
+    # After creation: enable PostGIS via shell/psql as noted above.
+    # Migrations: run alembic upgrade head (can be done in Render Shell for backend service).
